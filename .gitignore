@@ -1,0 +1,23 @@
+# Python
+DB_Buddy/venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Databases
+DB_Buddy/local_study.db
+*.db
+*.sqlite
+
+# Large LLM files
+DB_Buddy/qwen2.5-coder-7b-instruct-q4_k_m.gguf
+*.gguf
+
+# Streamlit
+.streamlit/
