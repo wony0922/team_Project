@@ -21,3 +21,5 @@ DB_Buddy/qwen2.5-coder-7b-instruct-q4_k_m.gguf
 
 # Streamlit
 .streamlit/
+
+.env*

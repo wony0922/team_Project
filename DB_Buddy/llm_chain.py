@@ -23,6 +23,8 @@ def generate_sql(user_query: str, db_url: str = None) -> str:
     """사용자의 자연어 질문을 SQL로 변환"""
     # LangChain의 create_sql_query_chain 대신 직접 구현 (Ollama와의 호환성을 높이기 위함)
     schema = get_schema_info(db_url)
+    if schema.startswith("스키마 조회 에러"):
+        raise RuntimeError(f"데이터베이스 연결 또는 스키마 조회에 실패했습니다: {schema}")
     template = """너는 데이터베이스 전문가야. 사용자의 질문을 해결하는 단일 SQL 쿼리를 작성해줘. 
     반드시 ```sql 과 ``` 로 감싸서 SQL 코드만 반환해.
     
@@ -58,6 +60,48 @@ def analyze_explain_plan(user_query: str, explain_result: str) -> str:
     result = chain.invoke({
         "user_query": user_query,
         "explain_result": explain_result
+    })
+    return result
+
+def generate_erd_from_schema(db_url: str = None) -> str:
+    """데이터베이스 실제 스키마로부터 ERD(Mermaid) 코드 생성"""
+    from db_utils import get_detailed_schema_summary
+    schema_info = get_detailed_schema_summary(db_url)
+    prompt = PromptTemplate.from_template(prompts.ERD_FROM_SCHEMA_PROMPT)
+    chain = prompt | llm
+    result = chain.invoke({"schema_info": schema_info})
+    return _extract_mermaid(result)
+
+def translate_sql(sql_query: str, db_url: str = None) -> str:
+    """SQL 구문을 상세히 한글로 번역 및 해설"""
+    from db_utils import get_detailed_schema_summary
+    schema_info = get_detailed_schema_summary(db_url)
+    prompt = PromptTemplate.from_template(prompts.SQL_TRANSLATOR_PROMPT)
+    chain = prompt | llm
+    result = chain.invoke({
+        "schema_info": schema_info,
+        "sql_query": sql_query
+    })
+    return result
+
+def generate_db_documentation(db_url: str = None) -> str:
+    """데이터베이스의 상세 스키마 정의 및 데이터 사전 생성"""
+    from db_utils import get_detailed_schema_summary
+    schema_info = get_detailed_schema_summary(db_url)
+    prompt = PromptTemplate.from_template(prompts.DB_DOCS_PROMPT)
+    chain = prompt | llm
+    result = chain.invoke({"schema_info": schema_info})
+    return result
+
+def assist_db_normalization(request: str, db_url: str = None) -> str:
+    """자연어 요구사항에 따라 데이터베이스 정규화 및 리팩토링 제안 수행"""
+    from db_utils import get_detailed_schema_summary
+    schema_info = get_detailed_schema_summary(db_url)
+    prompt = PromptTemplate.from_template(prompts.NORMALIZATION_PROMPT)
+    chain = prompt | llm
+    result = chain.invoke({
+        "schema_info": schema_info,
+        "request": request
     })
     return result
 

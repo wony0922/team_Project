@@ -4,3 +4,4 @@ langchain-community>=0.3.0
 SQLAlchemy>=2.0.25
 pandas
 streamlit-mermaid
+Faker>=19.0.0
