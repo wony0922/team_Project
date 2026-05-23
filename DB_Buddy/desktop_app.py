@@ -9,13 +9,21 @@ def is_port_open(port):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         return s.connect_ex(('127.0.0.1', port)) == 0
 
+def _find_python():
+    """venv → .venv → 시스템 Python 순서로 사용 가능한 Python 실행파일을 찾습니다."""
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.join(base_dir, "venv", "Scripts", "python.exe"),
+        os.path.join(base_dir, ".venv", "Scripts", "python.exe"),
+    ]
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return candidate
+    return sys.executable  # 가상환경이 없으면 시스템 Python 사용
+
 def start_streamlit():
-    # 현재 스크립트 위치 기준으로 python.exe 경로 탐색
-    python_exe = os.path.join(os.path.dirname(__file__), "venv", "Scripts", "python.exe")
-    if not os.path.exists(python_exe):
-        python_exe = sys.executable  # venv 환경이 아닐 경우 시스템 파이썬 사용
-        
-    app_py = os.path.join(os.path.dirname(__file__), "app.py")
+    python_exe = _find_python()
+    app_py = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app.py")
     
     # Streamlit을 headless 모드로 실행
     return subprocess.Popen(

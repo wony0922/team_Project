@@ -48,15 +48,50 @@ ERD_FROM_SCHEMA_PROMPT = """너는 데이터베이스 모델링 전문가야.
 제공된 실제 데이터베이스 스키마 상세 정보를 바탕으로 테이블 구조와 테이블 간의 외래키 참조 관계를 표현하는 Mermaid ERD 코드를 작성해줘.
 반드시 아래 서식에 맞춰서 ```mermaid 코드로만 ERD를 반환해. 설명이나 부가적인 말은 일절 하지 마.
 
+## 반드시 지켜야 할 Mermaid erDiagram 문법 규칙:
+1. 컬럼 데이터 타입에 괄호를 절대 사용하지 마. VARCHAR(20)이 아니라 VARCHAR 로만 써.
+2. 컬럼 제약조건(PK, FK)은 컬럼명 뒤에 큰따옴표로 감싸서 코멘트로 표기해. 예: VARCHAR C_ID "PK"
+3. 관계 라벨(: 뒤의 설명)은 반드시 큰따옴표로 감싸. 예: customer ||--o{{ order1 : "주문한다"
+4. 테이블명과 컬럼명에 공백이나 특수문자를 쓰지 마.
+5. 빈 줄이나 주석을 넣지 마.
+
 [스키마 정보]
 {schema_info}
 
-서식:
+올바른 출력 예시:
 ```mermaid
 erDiagram
-    테이블명1 ||--o{{ 테이블명2 : 관계설명
-    테이블명3 {{
-        type column_name
+    customer ||--o{{ order1 : "주문한다"
+    d_company ||--o{{ product : "공급한다"
+    product ||--o{{ order1 : "판매된다"
+    customer {{
+        VARCHAR C_ID "PK"
+        VARCHAR C_Name
+        INT C_Age
+        VARCHAR C_Grade
+        VARCHAR C_Job
+        INT C_Reserve
+    }}
+    order1 {{
+        CHAR O_ID "PK"
+        VARCHAR O_Name "FK"
+        CHAR O_Product "FK"
+        INT O_Quantity
+        VARCHAR O_Juso
+        DATE O_Date
+    }}
+    d_company {{
+        CHAR D_ID "PK"
+        VARCHAR D_Name
+        VARCHAR D_Juso
+        VARCHAR D_TelNo
+    }}
+    product {{
+        CHAR P_ID "PK"
+        VARCHAR P_Name
+        INT P_Jaego
+        INT P_Danga
+        VARCHAR P_Company "FK"
     }}
 ```
 """
