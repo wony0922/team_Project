@@ -69,8 +69,8 @@ with st.sidebar:
         "- **Streamlit**: Apache 2.0\n"
         "- **LangChain**: MIT\n"
         "- **Mermaid.js**: MIT\n"
-        "- **Faker**: MIT (더미데이터 생성)\n"
-        "- **PyMySQL**: MIT (MySQL 드라이버)\n"
+        "- **Faker**: MIT\n"
+        "- **PyMySQL**: MIT\n"
     )
 
 if db_type == "SQLite (기본/실습용)":
