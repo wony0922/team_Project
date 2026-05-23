@@ -160,14 +160,20 @@ if db_type == "SQLite (기본/실습용)":
                 try:
                     erd_result = llm_chain.generate_erd_from_schema(st.session_state.db_url)
                     st.session_state.erd_code = erd_result
-                    st.success("ERD 생성 성공!")
+                    if "erDiagram" in erd_result:
+                        st.success("ERD 생성 성공!")
+                    else:
+                        st.warning("⚠️ AI가 올바른 ERD 형식을 반환하지 못했습니다. 다시 시도해 주세요.")
                 except Exception as e:
                     st.error(f"ERD 생성 실패: {e}")
                     
         if st.session_state.erd_code:
             if "erDiagram" in st.session_state.erd_code:
                 st.subheader("생성된 ERD (Mermaid)")
-                st_mermaid(st.session_state.erd_code, height=500)
+                try:
+                    st_mermaid(st.session_state.erd_code, height=500)
+                except Exception:
+                    st.error("ERD 렌더링 중 오류가 발생했습니다. Mermaid 코드를 확인해 주세요.")
             else:
                 st.warning("⚠️ 올바른 ERD 다이어그램 코드가 생성되지 않았습니다. AI가 다이어그램 구조를 반환할 수 있도록 다시 시도해 주세요.")
             with st.expander("Mermaid 코드 보기"):
@@ -311,14 +317,20 @@ else: # MySQL
                 try:
                     erd_result = llm_chain.generate_erd_from_schema(st.session_state.db_url)
                     st.session_state.mysql_erd_code = erd_result
-                    st.success("MySQL ERD 생성 완료!")
+                    if "erDiagram" in erd_result:
+                        st.success("MySQL ERD 생성 완료!")
+                    else:
+                        st.warning("⚠️ AI가 올바른 ERD 형식을 반환하지 못했습니다. 다시 시도해 주세요.")
                 except Exception as e:
                     st.error(f"ERD 생성 실패: {e}")
                     
         if st.session_state.mysql_erd_code:
             if "erDiagram" in st.session_state.mysql_erd_code:
                 st.subheader("생성된 ERD (Mermaid)")
-                st_mermaid(st.session_state.mysql_erd_code, height=500)
+                try:
+                    st_mermaid(st.session_state.mysql_erd_code, height=500)
+                except Exception:
+                    st.error("ERD 렌더링 중 오류가 발생했습니다. Mermaid 코드를 확인해 주세요.")
             else:
                 st.warning("⚠️ 올바른 ERD 다이어그램 코드가 생성되지 않았습니다. AI가 다이어그램 구조를 반환할 수 있도록 다시 시도해 주세요.")
             with st.expander("Mermaid 코드 보기"):

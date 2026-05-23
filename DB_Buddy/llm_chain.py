@@ -70,7 +70,9 @@ def generate_erd_from_schema(db_url: str = None) -> str:
     prompt = PromptTemplate.from_template(prompts.ERD_FROM_SCHEMA_PROMPT)
     chain = prompt | llm
     result = chain.invoke({"schema_info": schema_info})
-    return _extract_mermaid(result)
+    erd_code = _extract_mermaid(result)
+    erd_code = _sanitize_mermaid_erd(erd_code)
+    return erd_code
 
 def translate_sql(sql_query: str, db_url: str = None) -> str:
     """SQL 구문을 상세히 한글로 번역 및 해설"""
@@ -114,6 +116,58 @@ def _extract_mermaid(text: str) -> str:
     # 블럭이 없으면 원본 그대로 반환
     return text.strip()
 
+def _sanitize_mermaid_erd(code: str) -> str:
+    """LLM이 생성한 Mermaid erDiagram 코드의 흔한 문법 오류를 자동 수정"""
+    import re
+    lines = code.split('\n')
+    sanitized = []
+    
+    for line in lines:
+        original = line
+        stripped = line.strip()
+        
+        # 빈 줄이나 주석은 건너뛰기
+        if not stripped or stripped.startswith('%%'):
+            continue
+        
+        # 마크다운 코드블럭 잔여물 제거
+        if stripped.startswith('```'):
+            continue
+            
+        # 1) 타입에서 괄호 제거: VARCHAR(20) -> VARCHAR, CHAR(3) -> CHAR, DECIMAL(10,2) -> DECIMAL
+        line = re.sub(r'\b([A-Z]+)\(\d+(?:,\s*\d+)?\)', r'\1', line)
+        
+        # 2) 컬럼 정의 줄에서 PK, FK가 따옴표 없이 쓰인 경우 따옴표로 감싸기
+        #    패턴: "        VARCHAR C_ID PK" -> "        VARCHAR C_ID "PK""
+        #    패턴: "        VARCHAR O_Name FK" -> "        VARCHAR O_Name "FK""
+        line = re.sub(r'\b(PK|FK)\s*$', r'"\1"', line)
+        # PK FK 가 둘 다 있는 경우: "INT col PK FK" -> "INT col "PK, FK""
+        line = re.sub(r'\b(PK)\s+(FK)\s*$', r'"\1, \2"', line)
+        
+        # 3) 관계 라인에서 따옴표 없는 관계 설명을 따옴표로 감싸기
+        #    패턴: customer ||--o{ order1 : 주문한다  -> customer ||--o{ order1 : "주문한다"
+        #    패턴: customer ||--o{ order1 : 주문한 고객  -> customer ||--o{ order1 : "주문한 고객"
+        rel_match = re.match(r'^(\s*\S+\s+[\|}{o\-]+\s+\S+\s*:\s*)(.+)$', line)
+        if rel_match:
+            prefix = rel_match.group(1)
+            label = rel_match.group(2).strip()
+            # 이미 따옴표로 감싸져 있지 않으면 감싸기
+            if not (label.startswith('"') and label.endswith('"')):
+                label = label.strip('"').strip("'")
+                label = f'"{label}"'
+            line = prefix + label
+            
+        sanitized.append(line)
+    
+    result = '\n'.join(sanitized)
+    
+    # erDiagram 키워드가 없으면 맨 앞에 추가
+    if 'erDiagram' not in result:
+        result = 'erDiagram\n' + result
+        
+    return result
+
+
 def _extract_sql(text: str) -> str:
     """결과 문자열에서 sql 블럭만 추출"""
     import re
@@ -121,3 +175,4 @@ def _extract_sql(text: str) -> str:
     if match:
         return match.group(1).strip()
     return text.replace("`", "").strip()
+
