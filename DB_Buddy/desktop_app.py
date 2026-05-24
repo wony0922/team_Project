@@ -24,10 +24,13 @@ def _find_python():
 def start_streamlit():
     python_exe = _find_python()
     app_py = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app.py")
+    # [수정됨] 환경변수로 호스트/포트를 바꿀 수 있게 하여 localhost 외 바인딩도 지원합니다.
+    host = os.environ.get("DB_BUDDY_HOST", "127.0.0.1")
+    port = os.environ.get("DB_BUDDY_PORT", "8501")
     
     # Streamlit을 headless 모드로 실행
     return subprocess.Popen(
-        [python_exe, "-m", "streamlit", "run", app_py, "--server.headless", "true", "--server.port", "8501"],
+        [python_exe, "-m", "streamlit", "run", app_py, "--server.headless", "true", "--server.address", host, "--server.port", port],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0 # 윈도우 창 안 띄움
@@ -36,17 +39,19 @@ def start_streamlit():
 if __name__ == "__main__":
     # Streamlit 실행
     proc = start_streamlit()
+    port = int(os.environ.get("DB_BUDDY_PORT", "8501"))
     
     # Streamlit이 완전히 켜질 때까지 대기 (최대 15초)
     for _ in range(30):
-        if is_port_open(8501):
+        if is_port_open(port):
             break
         time.sleep(0.5)
         
     try:
         # pywebview로 데스크탑 창 띄우기
         # Windows OS에서는 Edge HTML/WebView2 기반 창이 뜹니다.
-        webview.create_window("DB-Buddy Desktop", "http://127.0.0.1:8501", width=1400, height=900)
+        # [수정됨] 포트를 환경변수와 맞춰 데스크탑 창에서도 같은 서버를 엽니다.
+        webview.create_window("DB-Buddy Desktop", f"http://127.0.0.1:{port}", width=1400, height=900)
         webview.start()
     finally:
         # 데스크탑 창이 닫히면 Streamlit 백그라운드 프로세스도 함께 깨끗하게 종료

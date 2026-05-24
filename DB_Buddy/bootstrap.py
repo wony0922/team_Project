@@ -3,26 +3,28 @@
 # 학교 컴퓨터로 시연할 가능성이 높을 것 같아서......
 #  참고로 Tkinter GUI로 다운로드를 받을 것인지 물어 볼텐데, 당연히 무지성 yes 연타!!
 
-import importlib.util as importlib_util, subprocess, sys
+import importlib.util as importlib_util, os, subprocess, sys
 from pathlib import Path
 
 # -------------------------------------------------------------------------
 # 다운로드 받아야 할 패키지 리스트
 # -------------------------------------------------------------------------
+# [수정됨] pip 패키지명과 import 모듈명이 다른 패키지를 함께 관리합니다.
 REQUIRED_PACKAGES = [
-    "streamlit",
-    "streamlit-mermaid",
-    "pandas",
-    "sqlalchemy",
-    "pymysql",
-    "faker",
-    "langchain",
+    ("streamlit", "streamlit"),
+    ("streamlit-mermaid", "streamlit_mermaid"),
+    ("pandas", "pandas"),
+    ("SQLAlchemy", "sqlalchemy"),
+    ("PyMySQL", "pymysql"),
+    ("Faker", "faker"),
+    ("langchain", "langchain"),
+    ("langchain-community", "langchain_community"),
 ]
 
 # -------------------------------------------------------------------------
 # 누락된 패키지 확인
 # -------------------------------------------------------------------------
-missing_packages = [pkg for pkg in REQUIRED_PACKAGES if importlib_util.find_spec(pkg) is None]
+missing_packages = [pkg for pkg, module in REQUIRED_PACKAGES if importlib_util.find_spec(module) is None]
 
 # -------------------------------------------------------------------------
 # GUI 로 Yes/No 확인 함수 (Tkinter)
@@ -75,7 +77,20 @@ def main():
 
     # Streamlit 앱 실행
     app_path = Path(__file__).resolve().parent / "app.py"
-    subprocess.check_call([sys.executable, "-m", "streamlit", "run", str(app_path)])
+    # [수정됨] localhost 전용이 아니라 외부 접속 가능한 0.0.0.0 바인딩을 기본값으로 사용합니다.
+    host = os.environ.get("DB_BUDDY_HOST", "0.0.0.0")
+    port = os.environ.get("DB_BUDDY_PORT", "8501")
+    subprocess.check_call([
+        sys.executable,
+        "-m",
+        "streamlit",
+        "run",
+        str(app_path),
+        "--server.address",
+        host,
+        "--server.port",
+        port,
+    ])
 
 if __name__ == "__main__":
     main()
