@@ -3,6 +3,8 @@ from streamlit_mermaid import st_mermaid
 import db_utils
 import llm_chain
 import os
+import re
+from sqlalchemy.engine import URL
 
 st.set_page_config(page_title="DB-Buddy", layout="wide", page_icon="🤖")
 
@@ -10,7 +12,8 @@ st.title("🤖 DB-Buddy: 데이터베이스 학습 비서")
 st.markdown("자연어로 ERD를 설계하고, SQL을 자동 생성하며, 쿼리 분석 및 에러 멘토링까지 제공합니다.")
 
 # DB 초기화 (기본 SQLite)
-if not os.path.exists('local_study.db'):
+# [수정됨] 실행 위치와 관계없이 DB_Buddy 폴더의 SQLite 파일 존재 여부를 확인합니다.
+if not db_utils.LOCAL_DB_PATH.exists():
     db_utils.initialize_database()
 
 # 세션 상태 초기화
@@ -36,8 +39,38 @@ with st.sidebar:
         mysql_db = st.text_input("Database Name", value="test_db")
         
         if st.button("MySQL 연결 적용"):
-            url = f"mysql+pymysql://{mysql_user}:{mysql_pwd}@{mysql_host}:{mysql_port}/{mysql_db}"
             try:
+                # [수정됨] DB 이름을 CREATE DATABASE에 사용하기 전에 안전한 이름인지 검사합니다.
+                if not re.fullmatch(r"[0-9A-Za-z$_]+", mysql_db):
+                    raise ValueError("Database Name은 영문, 숫자, _, $, 문자만 사용할 수 있습니다.")
+
+                port = int(mysql_port)
+
+                # [수정됨] 먼저 특정 DB 없이 MySQL 서버에 접속해 DB가 없으면 자동 생성합니다.
+                server_url = URL.create(
+                    "mysql+pymysql",
+                    username=mysql_user,
+                    password=mysql_pwd,
+                    host=mysql_host,
+                    port=port,
+                    query={"charset": "utf8mb4"},
+                )
+                server_engine = db_utils.get_engine(server_url)
+                with server_engine.begin() as conn:
+                    conn.execute(db_utils.text(f"CREATE DATABASE IF NOT EXISTS `{mysql_db}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"))
+
+                # [수정됨] 비밀번호 특수문자가 있어도 깨지지 않도록 SQLAlchemy URL 객체로 연결 문자열을 생성합니다.
+                db_url = URL.create(
+                    "mysql+pymysql",
+                    username=mysql_user,
+                    password=mysql_pwd,
+                    host=mysql_host,
+                    port=port,
+                    database=mysql_db,
+                    query={"charset": "utf8mb4"},
+                )
+                url = db_url.render_as_string(hide_password=False)
+
                 # 연결 테스트
                 engine = db_utils.get_engine(url)
                 with engine.connect() as conn:

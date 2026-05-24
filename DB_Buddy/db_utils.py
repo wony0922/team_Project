@@ -1,16 +1,22 @@
 import pandas as pd
 import os
 import re
+from pathlib import Path
 from sqlalchemy import create_engine, text
 
-DEFAULT_SQLITE_URL = 'sqlite:///local_study.db'
+# [수정됨] 실행 위치가 루트/DB_Buddy 어디든 동일하게 DB_Buddy 폴더의 파일을 사용합니다.
+BASE_DIR = Path(__file__).resolve().parent
+LOCAL_DB_PATH = BASE_DIR / "local_study.db"
+SAMPLE_DATA_PATH = BASE_DIR / "sample_data.sql"
+DEFAULT_SQLITE_URL = f"sqlite:///{LOCAL_DB_PATH.as_posix()}"
 
 def initialize_database():
     """초기 샘플 데이터베이스 생성 (SQLite 전용)"""
-    if not os.path.exists('local_study.db'):
+    if not LOCAL_DB_PATH.exists():
         engine = create_engine(DEFAULT_SQLITE_URL)
         try:
-            with open('sample_data.sql', 'r', encoding='utf-8') as f:
+            # [수정됨] sample_data.sql 경로를 현재 작업 디렉터리가 아닌 파일 위치 기준으로 고정했습니다.
+            with SAMPLE_DATA_PATH.open('r', encoding='utf-8') as f:
                 sql_script = f.read()
             with engine.begin() as conn:
                 for statement in sql_script.split(';'):
@@ -291,7 +297,8 @@ def reset_database_to_default():
         conn.execute(text("PRAGMA foreign_keys = ON;"))
         
     try:
-        with open('sample_data.sql', 'r', encoding='utf-8') as f:
+        # [수정됨] 복원 시에도 sample_data.sql을 DB_Buddy 폴더 기준으로 읽습니다.
+        with SAMPLE_DATA_PATH.open('r', encoding='utf-8') as f:
             sql_script = f.read()
         with engine.begin() as conn:
             for statement in sql_script.split(';'):

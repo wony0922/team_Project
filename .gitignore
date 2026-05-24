@@ -1,5 +1,7 @@
 # Python
 DB_Buddy/venv/
+# [수정됨] DB_Buddy 폴더 안에 만드는 .venv도 Git 추적에서 제외합니다.
+DB_Buddy/.venv/
 __pycache__/
 *.pyc
 *.pyo
@@ -7,6 +9,8 @@ __pycache__/
 .Python
 env/
 venv/
+# [수정됨] 루트에 만드는 .venv도 Git 추적에서 제외합니다.
+.venv/
 pip-log.txt
 pip-delete-this-directory.txt
 
@@ -21,5 +25,8 @@ DB_Buddy/qwen2.5-coder-7b-instruct-q4_k_m.gguf
 
 # Streamlit
 .streamlit/
+
+# [수정됨] 로컬 에디터 설정 폴더는 Git 추적에서 제외합니다.
+.vscode/
 
 .env*

@@ -2,6 +2,8 @@ streamlit>=1.31.0
 langchain>=0.3.0
 langchain-community>=0.3.0
 SQLAlchemy>=2.0.25
+# [수정됨] app.py의 MySQL 연결 기능이 pymysql 모듈을 사용하므로 명시 의존성으로 추가했습니다.
+PyMySQL>=1.1.0
 pandas
 streamlit-mermaid
 Faker>=19.0.0
