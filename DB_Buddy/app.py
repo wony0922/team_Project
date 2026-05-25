@@ -10,6 +10,7 @@ from sqlalchemy.engine import URL
 from streamlit_mermaid import st_mermaid
 
 import db_utils
+import docker_utils
 import llm_chain
 
 
@@ -120,6 +121,7 @@ def _init_state():
         "mysql_docs": "",
         "db_url": db_utils.DEFAULT_SQLITE_URL,
         "menu": "DB",
+        "local_mysql_info": None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -129,6 +131,114 @@ def _init_state():
 def _ensure_local_db():
     if not db_utils.LOCAL_DB_PATH.exists():
         db_utils.initialize_database()
+
+
+def _render_local_mysql_panel():
+    ready, message = docker_utils.docker_is_ready()
+
+    if ready:
+        st.sidebar.success("Docker가 준비되어 있습니다.")
+        st.sidebar.caption("처음 실행할 때는 MySQL 이미지가 한 번 다운로드될 수 있습니다. 그 다음부터는 오프라인으로도 사용할 수 있습니다.")
+        if st.sidebar.button("로컬 MySQL 시작", use_container_width=True):
+            try:
+                with st.spinner("Docker로 MySQL을 준비하는 중..."):
+                    info = docker_utils.start_local_mysql()
+                    engine = db_utils.get_engine(info.sqlalchemy_url)
+                    with engine.connect() as conn:
+                        conn.execute(db_utils.text("SELECT 1"))
+                    st.session_state.db_url = info.sqlalchemy_url
+                    st.session_state.local_mysql_info = {
+                        "host": info.host,
+                        "port": info.port,
+                        "user": info.user,
+                        "database": info.database,
+                        "container_name": info.container_name,
+                    }
+                    st.sidebar.success(f"로컬 MySQL이 시작되었습니다. {info.host}:{info.port}")
+                    st.rerun()
+            except Exception as exc:
+                st.sidebar.error(str(exc))
+
+        local_info = st.session_state.get("local_mysql_info")
+        if local_info and st.session_state.db_url.startswith("mysql"):
+            st.sidebar.caption(
+                f"현재 연결: {local_info['host']}:{local_info['port']} / {local_info['database']}"
+            )
+    else:
+        st.sidebar.warning("Docker Desktop이 필요합니다.")
+        st.sidebar.caption(message)
+        st.sidebar.caption("처음 사용하는 경우에는 Docker를 먼저 설치해 주세요.")
+        st.sidebar.caption("설치 후에는 이 앱이 MySQL 컨테이너를 자동으로 올릴 수 있습니다.")
+
+        if st.sidebar.button("설치 방법 보기", use_container_width=True):
+            docker_utils.open_docker_download_page()
+
+        if st.sidebar.button("설치 파일 자동 다운로드", use_container_width=True):
+            try:
+                with st.spinner("Docker Desktop 설치 파일을 다운로드하는 중..."):
+                    installer_path = docker_utils.download_docker_installer()
+                st.sidebar.success(f"다운로드 완료: {installer_path}")
+                st.sidebar.caption("설치 파일을 실행하면 Docker Desktop 설치가 시작됩니다.")
+            except Exception as exc:
+                st.sidebar.error(str(exc))
+
+        if st.sidebar.button("다운로드 후 설치 실행", use_container_width=True):
+            try:
+                with st.spinner("설치 파일을 내려받고 실행하는 중..."):
+                    installer_path = docker_utils.download_docker_installer()
+                    docker_utils.launch_docker_installer(installer_path)
+                st.sidebar.success("설치 파일을 실행했습니다. 설치를 마친 뒤 앱으로 돌아와 다시 시작해 주세요.")
+            except Exception as exc:
+                st.sidebar.error(str(exc))
+
+
+def _render_remote_mysql_panel():
+    st.sidebar.caption("기존 MySQL 서버에 직접 연결합니다.")
+    host = st.sidebar.text_input("호스트", value="localhost")
+    port = st.sidebar.text_input("포트", value="3306")
+    user = st.sidebar.text_input("사용자", value="root")
+    pwd = st.sidebar.text_input("비밀번호", type="password")
+    db_name = st.sidebar.text_input("데이터베이스", value="test_db")
+
+    if st.sidebar.button("연결 적용", use_container_width=True):
+        try:
+            if not re.fullmatch(r"[0-9A-Za-z$_]+", db_name):
+                raise ValueError("데이터베이스 이름은 영문, 숫자, _, $만 사용할 수 있습니다.")
+            port_i = int(port)
+            server_url = URL.create(
+                "mysql+pymysql",
+                username=user,
+                password=pwd,
+                host=host,
+                port=port_i,
+                query={"charset": "utf8mb4"},
+            )
+            server_engine = db_utils.get_engine(server_url)
+            with server_engine.begin() as conn:
+                conn.execute(
+                    db_utils.text(
+                        f"CREATE DATABASE IF NOT EXISTS `{db_name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+                    )
+                )
+
+            db_url = URL.create(
+                "mysql+pymysql",
+                username=user,
+                password=pwd,
+                host=host,
+                port=port_i,
+                database=db_name,
+                query={"charset": "utf8mb4"},
+            ).render_as_string(hide_password=False)
+
+            engine = db_utils.get_engine(db_url)
+            with engine.connect() as conn:
+                conn.execute(db_utils.text("SELECT 1"))
+            st.session_state.db_url = db_url
+            st.session_state.local_mysql_info = None
+            st.sidebar.success("연결 완료")
+        except Exception as exc:
+            st.sidebar.error(str(exc))
 
 
 def _sidebar():
@@ -144,51 +254,12 @@ def _sidebar():
     )
 
     if db_type == "MySQL":
-        st.sidebar.caption("MySQL은 서버에 연결해 쓰는 더 강한 데이터베이스입니다. 네트워크가 필요하지만 규모가 커질수록 유리합니다.")
-        host = st.sidebar.text_input("호스트", value="localhost")
-        port = st.sidebar.text_input("포트", value="3306")
-        user = st.sidebar.text_input("사용자", value="root")
-        pwd = st.sidebar.text_input("비밀번호", type="password")
-        db_name = st.sidebar.text_input("데이터베이스", value="test_db")
-
-        if st.sidebar.button("연결 적용", use_container_width=True):
-            try:
-                if not re.fullmatch(r"[0-9A-Za-z$_]+", db_name):
-                    raise ValueError("데이터베이스 이름은 영문, 숫자, _, $만 사용할 수 있습니다.")
-                port_i = int(port)
-                server_url = URL.create(
-                    "mysql+pymysql",
-                    username=user,
-                    password=pwd,
-                    host=host,
-                    port=port_i,
-                    query={"charset": "utf8mb4"},
-                )
-                server_engine = db_utils.get_engine(server_url)
-                with server_engine.begin() as conn:
-                    conn.execute(
-                        db_utils.text(
-                            f"CREATE DATABASE IF NOT EXISTS `{db_name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
-                        )
-                    )
-
-                db_url = URL.create(
-                    "mysql+pymysql",
-                    username=user,
-                    password=pwd,
-                    host=host,
-                    port=port_i,
-                    database=db_name,
-                    query={"charset": "utf8mb4"},
-                ).render_as_string(hide_password=False)
-
-                engine = db_utils.get_engine(db_url)
-                with engine.connect() as conn:
-                    conn.execute(db_utils.text("SELECT 1"))
-                st.session_state.db_url = db_url
-                st.sidebar.success("연결 완료")
-            except Exception as exc:
-                st.sidebar.error(str(exc))
+        st.sidebar.caption("MySQL을 로컬 Docker로 자동 실행할 수 있습니다. 처음 사용이라면 Docker Desktop이 필요합니다.")
+        use_local_mysql = st.sidebar.checkbox("로컬 Docker MySQL 사용", value=True)
+        if use_local_mysql:
+            _render_local_mysql_panel()
+        else:
+            _render_remote_mysql_panel()
     else:
         st.session_state.db_url = db_utils.DEFAULT_SQLITE_URL
         st.sidebar.caption("SQLite는 인터넷 연결 없이 로컬에서 바로 쓸 수 있는 가벼운 데이터베이스입니다.")

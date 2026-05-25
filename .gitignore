@@ -30,3 +30,7 @@ DB_Buddy/qwen2.5-coder-7b-instruct-q4_k_m.gguf
 .vscode/
 
 .env*
+
+# Runtime Docker assets created by DB_Buddy
+DB_Buddy/downloads/
+DB_Buddy/docker/mysql/
