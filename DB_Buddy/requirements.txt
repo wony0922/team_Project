@@ -7,3 +7,4 @@ PyMySQL>=1.1.0
 pandas
 streamlit-mermaid
 Faker>=19.0.0
+reportlab>=4.0.0
