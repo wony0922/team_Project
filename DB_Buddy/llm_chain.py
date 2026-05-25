@@ -1,14 +1,15 @@
 import os
+import json
 import shutil
 
 from langchain_community.llms import Ollama
 from langchain_core.prompts import PromptTemplate
 
-from db_utils import get_schema_info
+from db_utils import build_mermaid_erd_from_schema, get_insertion_context, get_schema_info
 import prompts
 
 
-MODEL_NAME = os.environ.get("DB_BUDDY_MODEL", "qwen2.5-coder:7b")
+MODEL_NAME = os.environ.get("DB_BUDDY_MODEL", "qwen2.5-coder:3b")
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL")
 OLLAMA_AVAILABLE = os.environ.get("DB_BUDDY_OLLAMA_AVAILABLE", "1") == "1"
 
@@ -111,10 +112,15 @@ def generate_erd_from_schema(db_url: str = None) -> str:
     schema_info = get_detailed_schema_summary(db_url)
     prompt = PromptTemplate.from_template(prompts.ERD_FROM_SCHEMA_PROMPT)
     chain = prompt | llm
-    result = _invoke(chain, {"schema_info": schema_info})
-    erd_code = _extract_mermaid(result)
-    erd_code = _sanitize_mermaid_erd(erd_code)
-    return erd_code
+    try:
+        result = _invoke(chain, {"schema_info": schema_info})
+        erd_code = _extract_mermaid(result)
+        erd_code = _sanitize_mermaid_erd(erd_code)
+        if not _looks_like_mermaid_erd(erd_code):
+            raise RuntimeError("LLM ERD output was not valid Mermaid.")
+        return erd_code
+    except Exception:
+        return build_mermaid_erd_from_schema(db_url)
 
 
 def translate_sql(sql_query: str, db_url: str = None) -> str:
@@ -162,6 +168,21 @@ def assist_db_normalization(request: str, db_url: str = None) -> str:
     return result
 
 
+def plan_data_insertion(request: str, db_url: str = None) -> dict:
+    """Analyze a natural-language request and return an insertion plan."""
+    insertion_context = get_insertion_context(db_url)
+    prompt = PromptTemplate.from_template(prompts.DATA_INSERTION_PROMPT)
+    chain = prompt | llm
+    result = _invoke(
+        chain,
+        {
+            "insertion_context": insertion_context,
+            "request": request,
+        },
+    )
+    return _extract_json_object(result)
+
+
 def _extract_mermaid(text: str) -> str:
     """Extract Mermaid code from an LLM response."""
     import re
@@ -176,6 +197,8 @@ def _sanitize_mermaid_erd(code: str) -> str:
     """Fix common Mermaid ERD formatting issues."""
     import re
 
+    code = code.replace("{{", "{").replace("}}", "}")
+    code = code.replace("o{{", "o{").replace("o}}", "o}")
     lines = code.split("\n")
     sanitized = []
 
@@ -210,6 +233,17 @@ def _sanitize_mermaid_erd(code: str) -> str:
     return result
 
 
+def _looks_like_mermaid_erd(code: str) -> bool:
+    """Check whether the ERD output has the expected Mermaid shape."""
+    if not code or "erDiagram" not in code:
+        return False
+    if "{" not in code or "}" not in code:
+        return False
+    if "||--" not in code and "}o--" not in code and "o{" not in code:
+        return False
+    return True
+
+
 def _extract_sql(text: str) -> str:
     """Extract SQL code from an LLM response."""
     import re
@@ -218,3 +252,32 @@ def _extract_sql(text: str) -> str:
     if match:
         return match.group(1).strip()
     return text.replace("`", "").strip()
+
+
+def _extract_json_object(text: str) -> dict:
+    """Extract a JSON object from an LLM response."""
+    import re
+
+    candidates = [
+        text.strip(),
+    ]
+
+    fenced = re.search(r"```json(.*?)```", text, re.DOTALL | re.IGNORECASE)
+    if fenced:
+        candidates.insert(0, fenced.group(1).strip())
+
+    last_error = None
+    for candidate in candidates:
+        try:
+            return json.loads(candidate)
+        except Exception as exc:
+            last_error = exc
+
+    brace_match = re.search(r"\{.*\}", text, re.DOTALL)
+    if brace_match:
+        try:
+            return json.loads(brace_match.group(0))
+        except Exception as exc:
+            last_error = exc
+
+    raise RuntimeError(f"LLM 응답에서 JSON 계획을 읽지 못했습니다: {last_error}")
