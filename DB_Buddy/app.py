@@ -637,17 +637,16 @@ def _build_erd_pdf_bytes(code: str) -> bytes:
 
 def _render_sql_lab(db_url: str, query_key: str = "current_query", gen_label: str = "SQL 생성", run_label: str = "쿼리 실행"):
     st.header("SQL 작업실")
-    st.caption("자연어 요청을 먼저 SQL 문으로 바꾸고, 확인한 뒤 실제 데이터를 넣습니다.")
+    st.caption("자연어 요청을 SQL 문으로 바꾸고, 확인한 뒤 실행합니다. SELECT, INSERT, UPDATE, DELETE, CREATE 등 여러 SQL 문법을 사용할 수 있습니다.")
 
     prompt = st.text_area(
         "요청",
         value=st.session_state.get(query_key, ""),
         height=180,
         key=f"{query_key}_area",
-        placeholder="예: 신규 고객 2명과 주문 1건 샘플을 넣어줘",
+        placeholder="예: 가입일이 가장 오래된 고객 5명을 보여줘 / users 테이블의 이메일을 바꿔줘 / 신규 고객 2명을 넣어줘",
     )
 
-    preview_key = f"{query_key}_preview_plan"
     preview_text_key = f"{query_key}_preview_text"
     preview_desc_key = f"{query_key}_preview_desc"
     executed_key = f"{query_key}_executed"
@@ -658,30 +657,17 @@ def _render_sql_lab(db_url: str, query_key: str = "current_query", gen_label: st
             st.warning("먼저 요청 내용을 입력해 주세요.")
             return
 
-        with st.spinner("어느 테이블에 넣을지 판단하는 중..."):
+        with st.spinner("요청을 SQL 문으로 바꾸는 중..."):
             try:
-                plan = llm_chain.plan_data_insertion(request, db_url)
+                sql = llm_chain.generate_sql(request, db_url)
             except Exception as exc:
                 st.error(str(exc))
                 return
 
-        target_table = plan.get("target_table")
-        rows = plan.get("rows") or []
-        reason = plan.get("reason", "")
-
-        if not target_table or not isinstance(rows, list) or not rows:
-            st.error("LLM이 유효한 삽입 계획을 만들지 못했습니다.")
-            with st.expander("응답 내용", expanded=True):
-                st.json(plan)
-            return
-
-        st.session_state[preview_key] = plan
-        sql_preview = _build_insert_sql_preview(db_url, target_table, rows)
-        st.session_state[preview_text_key] = sql_preview["preview_text"]
-        st.session_state[preview_desc_key] = sql_preview["descriptions"]
+        st.session_state[preview_text_key] = db_utils.normalize_sql_query(sql)
+        st.session_state[preview_desc_key] = ["생성된 SQL을 확인하고 필요하면 수정한 뒤 실행하세요."]
         st.session_state[executed_key] = False
 
-    plan = st.session_state.get(preview_key)
     preview_text = st.session_state.get(preview_text_key, "")
     preview_desc = st.session_state.get(preview_desc_key, [])
 
@@ -689,109 +675,45 @@ def _render_sql_lab(db_url: str, query_key: str = "current_query", gen_label: st
         st.subheader("SQL문 전용 창")
         st.caption("이곳에 sql문이 생성됩니다.")
 
-        if plan and preview_text:
-            reason = plan.get("reason", "")
-            if reason:
-                st.markdown(f"**설명:** {reason}")
-            st.text_area(
-                "SQL 미리보기",
-                value=preview_text,
-                height=280,
-                disabled=True,
-                label_visibility="collapsed",
-            )
-            if preview_desc:
-                st.caption("각 SQL문이 무엇을 하는지 아래에 설명합니다.")
-                for item in preview_desc:
-                    st.write(f"- {item}")
-        else:
-            st.text_area(
-                "SQL 미리보기",
-                value="이곳에 sql문이 생성됩니다.",
-                height=280,
-                disabled=True,
-                label_visibility="collapsed",
-            )
+        if not preview_text:
+            st.session_state[preview_text_key] = ""
 
-    execute_disabled = not bool(plan and preview_text)
+        edited_sql = st.text_area(
+            "SQL 미리보기",
+            height=280,
+            key=preview_text_key,
+            placeholder="이곳에 sql문이 생성됩니다.",
+            label_visibility="collapsed",
+        )
+        if preview_desc:
+            for item in preview_desc:
+                st.caption(item)
+
+    execute_disabled = not bool(st.session_state.get(preview_text_key, "").strip())
     if st.button("SQL문 실행", type="primary", use_container_width=True, disabled=execute_disabled):
-        if not plan:
-            st.warning("먼저 SQL문을 생성해 주세요.")
+        sql_to_run = st.session_state.get(preview_text_key, "").strip()
+        if not sql_to_run:
+            st.warning("먼저 SQL문을 생성하거나 입력해 주세요.")
             return
 
-        target_table = plan.get("target_table", "")
-        rows = plan.get("rows") or []
-        with st.spinner("데이터를 넣는 중..."):
+        with st.spinner("SQL문을 실행하는 중..."):
             try:
-                inserted = db_utils.insert_rows(db_url, target_table, rows)
-                st.success(f"{target_table}에 {inserted}행을 넣었습니다.")
-                st.session_state[preview_key] = None
-                st.session_state[preview_text_key] = ""
-                st.session_state[preview_desc_key] = []
+                result_df, error = db_utils.execute_query(sql_to_run, db_url)
+                if error:
+                    st.error(error)
+                    return
+                st.success("SQL문 실행 완료")
+                if result_df is not None and not result_df.empty:
+                    st.dataframe(result_df, use_container_width=True)
                 st.session_state[executed_key] = True
-                st.rerun()
             except Exception as exc:
                 st.error(str(exc))
 
     if st.button("예고 지우기", use_container_width=True):
-        st.session_state[preview_key] = None
         st.session_state[preview_text_key] = ""
         st.session_state[preview_desc_key] = []
         st.session_state[executed_key] = False
         st.rerun()
-
-
-def _build_insert_sql_preview(db_url: str, table_name: str, rows: list) -> dict:
-    """삽입 예정 SQL과 설명 문구를 생성"""
-    if not table_name or not rows:
-        return {"preview_text": "", "descriptions": []}
-
-    engine = db_utils.get_engine(db_url)
-    from sqlalchemy import inspect
-
-    inspector = inspect(engine)
-    column_info = {col["name"]: col for col in inspector.get_columns(table_name)}
-    pk_columns = set(inspector.get_pk_constraint(table_name).get("constrained_columns", []) or [])
-
-    preview_lines = []
-    descriptions = []
-
-    for idx, row in enumerate(rows, start=1):
-        if not isinstance(row, dict):
-            continue
-
-        insert_row = {}
-        for key, value in row.items():
-            col_info = column_info.get(key)
-            if not col_info or value is None:
-                continue
-            col_type = str(col_info["type"]).upper()
-            if col_info.get("autoincrement") or (key in pk_columns and "INT" in col_type):
-                continue
-            insert_row[key] = value
-
-        if not insert_row:
-            continue
-
-        columns = ", ".join(f"`{col}`" for col in insert_row.keys())
-        values = ", ".join(_sql_literal(value) for value in insert_row.values())
-        preview_lines.append(f"-- {idx}번째 문장: `{table_name}` 테이블에 한 행을 추가하는 INSERT 문입니다.")
-        preview_lines.append(f"INSERT INTO `{table_name}` ({columns}) VALUES ({values});")
-        descriptions.append(f"{idx}번째 문장: `{table_name}` 테이블에 한 행을 추가하는 INSERT 문입니다.")
-
-    return {"preview_text": "\n".join(preview_lines), "descriptions": descriptions}
-
-
-def _sql_literal(value):
-    """SQL 미리보기용 값 포맷"""
-    if value is None:
-        return "NULL"
-    if isinstance(value, bool):
-        return "1" if value else "0"
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return str(value)
-    text = str(value).replace("\\", "\\\\").replace("'", "''")
-    return f"'{text}'"
 
 
 def _render_explain(db_url: str, query_key: str = "current_query"):

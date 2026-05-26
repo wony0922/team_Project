@@ -72,24 +72,48 @@ def get_engine(db_url=None):
     return create_engine(db_url)
 
 def is_safe_query(query: str) -> bool:
-    """파괴적인 쿼리를 차단하는 간단한 검사 로직"""
-    query_upper = query.upper()
-    dangerous_keywords = ['DROP', 'DELETE', 'TRUNCATE', 'ALTER', 'UPDATE', 'INSERT']
-    for keyword in dangerous_keywords:
-        if re.search(r'\b' + keyword + r'\b', query_upper):
-            return False
-    return True
+    """SQL 작업실은 사용자가 확인 후 실행하므로 빈 쿼리만 차단합니다."""
+    return bool(normalize_sql_query(query))
+
+def normalize_sql_query(query: str) -> str:
+    """AI 응답/업로드 내용에서 실행할 SQL 한 문장을 추출"""
+    if not query:
+        return ""
+
+    cleaned = query.strip()
+    fenced = re.search(r"```(?:sql)?\s*(.*?)```", cleaned, re.DOTALL | re.IGNORECASE)
+    if fenced:
+        cleaned = fenced.group(1).strip()
+    cleaned = cleaned.replace("```", "").strip()
+
+    statements = [statement.strip() for statement in cleaned.split(";") if statement.strip()]
+    if statements:
+        cleaned = statements[0]
+
+    return cleaned.rstrip(";").strip()
 
 def execute_query(query: str, db_url=None):
-    """쿼리를 실행하고 결과를 DataFrame과 에러(있을 경우)로 반환"""
+    """SQL을 실행하고 결과 DataFrame과 에러(있을 경우)를 반환"""
+    query = normalize_sql_query(query)
     if not is_safe_query(query):
-        return None, "보안 경고: 데이터를 변경하거나 삭제하는 쿼리는 실행할 수 없습니다. (SELECT 문만 허용됨)"
+        return None, "실행할 SQL 문을 입력해 주세요."
 
     engine = get_engine(db_url)
     try:
-        # SQLAlchemy connection을 사용하여 pandas에서 직접 쿼리 실행
-        with engine.connect() as conn:
-            df = pd.read_sql_query(text(query), conn)
+        with engine.begin() as conn:
+            result = conn.execute(text(query))
+            if result.returns_rows:
+                rows = result.fetchall()
+                df = pd.DataFrame(rows, columns=result.keys())
+            else:
+                df = pd.DataFrame(
+                    [
+                        {
+                            "status": "실행 완료",
+                            "affected_rows": result.rowcount if result.rowcount is not None else "unknown",
+                        }
+                    ]
+                )
         return df, None
     except Exception as e:
         return None, str(e)

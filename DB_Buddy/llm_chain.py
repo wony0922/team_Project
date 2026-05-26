@@ -55,13 +55,23 @@ def generate_erd(user_requirements: str) -> str:
 
 
 def generate_sql(user_query: str, db_url: str = None) -> str:
-    """Convert a user question into SQL."""
+    """Convert a natural-language request into an executable SQL statement."""
+    if not user_query or not user_query.strip():
+        raise ValueError("SQL로 바꿀 요청을 먼저 입력해 주세요.")
+
     schema = get_schema_info(db_url)
     if "오류" in schema or "error" in schema.lower():
         raise RuntimeError(f"데이터베이스 연결 또는 스키마 조회에 실패했습니다: {schema}")
+    if not schema.strip():
+        raise RuntimeError("현재 데이터베이스에 테이블 스키마가 없습니다. 먼저 테이블을 만들거나 올바른 DB에 연결해 주세요.")
 
-    template = """당신은 데이터베이스 전문가입니다. 사용자의 질문에 답하는 유효한 SQL 쿼리를 작성하세요.
-반드시 ```sql ... ``` 형식으로 SQL 코드만 반환하세요.
+    template = """당신은 데이터베이스 전문가입니다. 사용자의 자연어 요청을 실행 가능한 SQL 한 문장으로 변환하세요.
+규칙:
+- SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER 등 요청 의도에 맞는 SQL 문법을 사용할 수 있습니다.
+- 반드시 아래 스키마에 존재하는 테이블과 컬럼을 우선 사용하세요.
+- 스키마에 없는 테이블/컬럼을 임의로 만들지 마세요. 단, 사용자가 CREATE TABLE처럼 새 구조 생성을 명확히 요청하면 생성 SQL을 작성할 수 있습니다.
+- 설명 문장 없이 반드시 ```sql ... ``` 형식으로 SQL 코드만 반환하세요.
+- 여러 문장을 만들지 말고 가장 필요한 SQL 한 문장만 반환하세요.
 
 [스키마 정보]
 {schema}
@@ -251,7 +261,16 @@ def _extract_sql(text: str) -> str:
     match = re.search(r"```sql(.*?)```", text, re.DOTALL | re.IGNORECASE)
     if match:
         return match.group(1).strip()
-    return text.replace("`", "").strip()
+
+    cleaned = text.replace("`", "").strip()
+    sql_match = re.search(
+        r"((?:SELECT|WITH|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|TRUNCATE|REPLACE|MERGE|PRAGMA|SHOW|DESCRIBE|DESC)\b.*?)(?:;|$)",
+        cleaned,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if sql_match:
+        return sql_match.group(1).strip()
+    return cleaned
 
 
 def _extract_json_object(text: str) -> dict:
