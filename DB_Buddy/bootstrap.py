@@ -15,7 +15,7 @@ from tkinter import messagebox
 BASE_DIR = Path(__file__).resolve().parent
 APP_PATH = BASE_DIR / "desktop_app.py"
 REQUIREMENTS_PATH = BASE_DIR / "requirements.txt"
-MODEL_NAME = os.environ.get("DB_BUDDY_MODEL", "qwen2.5-coder:3b")
+MODEL_NAME = os.environ.get("DB_BUDDY_MODEL", "qwen2.5-coder:7b")
 LOCAL_PYTHON = BASE_DIR / ".venv" / "Scripts" / "python.exe"
 
 

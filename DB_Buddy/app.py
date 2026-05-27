@@ -194,9 +194,9 @@ def _sidebar():
         st.sidebar.caption("SQLite는 인터넷 연결 없이 로컬에서 바로 쓸 수 있는 가벼운 데이터베이스입니다.")
 
     st.sidebar.divider()
-    pages = ["DB", "SQL 작업실", "ERD", "설명"]
+    pages = ["DB", "SQL 작업실", "ERD"]
     if st.session_state.db_url.startswith("mysql"):
-        pages = ["DB", "SQL 작업실", "ERD", "문서", "정규화", "설명"]
+        pages = ["DB", "SQL 작업실", "ERD", "문서", "정규화"]
 
     if st.session_state.menu not in pages:
         st.session_state.menu = pages[0]
@@ -716,27 +716,6 @@ def _render_sql_lab(db_url: str, query_key: str = "current_query", gen_label: st
         st.rerun()
 
 
-def _render_explain(db_url: str, query_key: str = "current_query"):
-    st.header("실행 계획")
-    st.caption("SQL이 어떻게 실행되는지 보고, 느린 이유와 개선 방향을 함께 살펴봅니다.")
-    query = st.text_area("분석할 SQL", value=st.session_state.get(query_key, ""), height=140)
-    if st.button("실행 계획 분석", use_container_width=True):
-        if not query.strip():
-            st.warning("먼저 SQL을 입력해 주세요.")
-            return
-        with st.spinner("EXPLAIN 실행 중..."):
-            explain = db_utils.execute_explain_plan(query, db_url)
-            if "error" in explain.lower():
-                st.error(explain)
-            else:
-                st.code(explain, language="text")
-                with st.spinner("AI에 분석을 요청하는 중..."):
-                    try:
-                        result = llm_chain.analyze_explain_plan(query, explain)
-                        st.markdown(result)
-                    except Exception as exc:
-                        st.error(str(exc))
-
 
 def _render_mysql_docs(db_url: str):
     st.header("문서")
@@ -785,8 +764,6 @@ def main():
         _render_sql_lab(db_url)
     elif menu == "ERD":
         _render_erd_page(db_url)
-    elif menu == "설명":
-        _render_explain(db_url)
     elif menu == "문서":
         _render_mysql_docs(db_url)
     elif menu == "정규화":

@@ -9,7 +9,7 @@ from db_utils import build_mermaid_erd_from_schema, get_insertion_context, get_s
 import prompts
 
 
-MODEL_NAME = os.environ.get("DB_BUDDY_MODEL", "qwen2.5-coder:3b")
+MODEL_NAME = os.environ.get("DB_BUDDY_MODEL", "qwen2.5-coder:7b")
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL")
 OLLAMA_AVAILABLE = os.environ.get("DB_BUDDY_OLLAMA_AVAILABLE", "1") == "1"
 
