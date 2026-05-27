@@ -1,8 +1,9 @@
 import pandas as pd
 import os
 import re
+import tempfile
 from pathlib import Path
-from sqlalchemy import create_engine, text
+from sqlalchemy import MetaData, Table, create_engine, inspect, text
 
 # [수정됨] 실행 위치가 루트/DB_Buddy 어디든 동일하게 DB_Buddy 폴더의 파일을 사용합니다.
 BASE_DIR = Path(__file__).resolve().parent
@@ -26,6 +27,44 @@ def initialize_database():
         except Exception as e:
             print(f"데이터베이스 초기화 에러: {e}")
 
+def replace_local_database_from_bytes(db_bytes: bytes):
+    """업로드한 SQLite DB 파일로 로컬 실습 DB를 교체"""
+    if not db_bytes:
+        raise ValueError("업로드된 DB 파일이 비어 있습니다.")
+
+    LOCAL_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as tmp:
+        tmp.write(db_bytes)
+        tmp_path = Path(tmp.name)
+
+    try:
+        test_engine = create_engine(f"sqlite:///{tmp_path.as_posix()}")
+        inspector = inspect(test_engine)
+        _ = inspector.get_table_names()
+        test_engine.dispose()
+        os.replace(tmp_path, LOCAL_DB_PATH)
+    except Exception as exc:
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except Exception:
+            pass
+        raise RuntimeError(f"SQLite DB 파일로 확인되지 않았습니다: {exc}") from exc
+
+def export_local_database_copy(output_path=None):
+    """현재 로컬 DB를 지정 경로로 복사해서 저장"""
+    if not LOCAL_DB_PATH.exists():
+        raise FileNotFoundError("저장할 로컬 DB 파일이 없습니다.")
+
+    if output_path is None:
+        output_path = BASE_DIR / "exports" / "local_study_backup.db"
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(LOCAL_DB_PATH.read_bytes())
+    return output_path
+
 def get_engine(db_url=None):
     """지정된 URL에 대한 SQLAlchemy 엔진 반환"""
     if not db_url:
@@ -33,24 +72,48 @@ def get_engine(db_url=None):
     return create_engine(db_url)
 
 def is_safe_query(query: str) -> bool:
-    """파괴적인 쿼리를 차단하는 간단한 검사 로직"""
-    query_upper = query.upper()
-    dangerous_keywords = ['DROP', 'DELETE', 'TRUNCATE', 'ALTER', 'UPDATE', 'INSERT']
-    for keyword in dangerous_keywords:
-        if re.search(r'\b' + keyword + r'\b', query_upper):
-            return False
-    return True
+    """SQL 작업실은 사용자가 확인 후 실행하므로 빈 쿼리만 차단합니다."""
+    return bool(normalize_sql_query(query))
+
+def normalize_sql_query(query: str) -> str:
+    """AI 응답/업로드 내용에서 실행할 SQL 한 문장을 추출"""
+    if not query:
+        return ""
+
+    cleaned = query.strip()
+    fenced = re.search(r"```(?:sql)?\s*(.*?)```", cleaned, re.DOTALL | re.IGNORECASE)
+    if fenced:
+        cleaned = fenced.group(1).strip()
+    cleaned = cleaned.replace("```", "").strip()
+
+    statements = [statement.strip() for statement in cleaned.split(";") if statement.strip()]
+    if statements:
+        cleaned = statements[0]
+
+    return cleaned.rstrip(";").strip()
 
 def execute_query(query: str, db_url=None):
-    """쿼리를 실행하고 결과를 DataFrame과 에러(있을 경우)로 반환"""
+    """SQL을 실행하고 결과 DataFrame과 에러(있을 경우)를 반환"""
+    query = normalize_sql_query(query)
     if not is_safe_query(query):
-        return None, "보안 경고: 데이터를 변경하거나 삭제하는 쿼리는 실행할 수 없습니다. (SELECT 문만 허용됨)"
+        return None, "실행할 SQL 문을 입력해 주세요."
 
     engine = get_engine(db_url)
     try:
-        # SQLAlchemy connection을 사용하여 pandas에서 직접 쿼리 실행
-        with engine.connect() as conn:
-            df = pd.read_sql_query(text(query), conn)
+        with engine.begin() as conn:
+            result = conn.execute(text(query))
+            if result.returns_rows:
+                rows = result.fetchall()
+                df = pd.DataFrame(rows, columns=result.keys())
+            else:
+                df = pd.DataFrame(
+                    [
+                        {
+                            "status": "실행 완료",
+                            "affected_rows": result.rowcount if result.rowcount is not None else "unknown",
+                        }
+                    ]
+                )
         return df, None
     except Exception as e:
         return None, str(e)
@@ -95,7 +158,6 @@ def execute_explain_plan(query: str, db_url=None) -> str:
     except Exception as e:
         return f"실행 계획 분석 중 에러 발생: {e}"
 
-from sqlalchemy import inspect
 from faker import Faker
 import random
 
@@ -135,6 +197,163 @@ def get_detailed_schema_summary(db_url=None) -> str:
         summary.append("")
     return "\n".join(summary)
 
+def build_mermaid_erd_from_schema(db_url=None) -> str:
+    """실제 DB 스키마를 기반으로 Mermaid ERD를 생성"""
+    engine = get_engine(db_url)
+    inspector = inspect(engine)
+    tables = inspector.get_table_names()
+
+    if not tables:
+        raise ValueError("ERD를 생성할 테이블이 없습니다.")
+
+    lines = ["erDiagram"]
+
+    for table in tables:
+        columns = inspector.get_columns(table)
+        pk_constraint = inspector.get_pk_constraint(table)
+        pks = set(pk_constraint.get("constrained_columns", []) or [])
+        fks = inspector.get_foreign_keys(table)
+        fk_columns = {
+            col
+            for fk in fks
+            for col in fk.get("constrained_columns", [])
+        }
+
+        lines.append(f"    {table} {{")
+        for col in columns:
+            col_name = col["name"]
+            col_type = _mermaid_type_name(str(col["type"]))
+            attrs = []
+            if col_name in pks:
+                attrs.append("PK")
+            if col_name in fk_columns:
+                attrs.append("FK")
+            attr_text = f' "{", ".join(attrs)}"' if attrs else ""
+            lines.append(f"        {col_type} {col_name}{attr_text}")
+        lines.append("    }")
+
+    seen_relations = set()
+    for table in tables:
+        fks = inspector.get_foreign_keys(table)
+        for fk in fks:
+            referred_table = fk.get("referred_table")
+            constrained_columns = fk.get("constrained_columns", [])
+            referred_columns = fk.get("referred_columns", [])
+            if not referred_table or not constrained_columns or not referred_columns:
+                continue
+            relation_key = (referred_table, table, tuple(constrained_columns), tuple(referred_columns))
+            if relation_key in seen_relations:
+                continue
+            seen_relations.add(relation_key)
+            label = ", ".join(constrained_columns)
+            lines.append(f'    {referred_table} ||--o{{ {table} : "{label}"')
+
+    return "\n".join(lines)
+
+def _mermaid_type_name(type_name: str) -> str:
+    """Mermaid ERD에서 쓸 수 있도록 타입명을 단순화"""
+    clean = re.sub(r"\(.*?\)", "", type_name).strip().upper()
+    if not clean:
+        return "TEXT"
+    if "INT" in clean:
+        return "INT"
+    if any(token in clean for token in ["CHAR", "TEXT", "CLOB", "VARCHAR"]):
+        return "VARCHAR"
+    if any(token in clean for token in ["DATE", "TIME"]):
+        return "DATETIME" if "TIME" in clean else "DATE"
+    if any(token in clean for token in ["DECIMAL", "NUMERIC", "FLOAT", "DOUBLE", "REAL"]):
+        return "DECIMAL"
+    return clean.split()[0]
+
+def get_insertion_context(db_url=None, sample_limit=3) -> str:
+    """LLM이 데이터 삽입 대상을 고를 수 있도록 스키마와 샘플을 함께 반환"""
+    engine = get_engine(db_url)
+    inspector = inspect(engine)
+    tables = inspector.get_table_names()
+
+    if not tables:
+        raise ValueError("데이터베이스에 테이블이 없습니다.")
+
+    parts = []
+    with engine.connect() as conn:
+        for table in tables:
+            columns = inspector.get_columns(table)
+            fks = inspector.get_foreign_keys(table)
+            pk_constraint = inspector.get_pk_constraint(table)
+            pks = pk_constraint.get('constrained_columns', []) if pk_constraint else []
+
+            parts.append(f"Table: {table}")
+            parts.append("  Columns:")
+            for col in columns:
+                col_name = col['name']
+                col_type = str(col['type'])
+                flags = []
+                if col_name in pks:
+                    flags.append("PK")
+                for fk in fks:
+                    if col_name in fk.get('constrained_columns', []):
+                        flags.append(f"FK->{fk['referred_table']}.{fk['referred_columns'][0]}")
+                flag_text = f" [{' '.join(flags)}]" if flags else ""
+                parts.append(f"    - {col_name} ({col_type}){flag_text}")
+
+            try:
+                result = conn.execute(text(f"SELECT * FROM `{table}` LIMIT {int(sample_limit)}"))
+                rows = result.fetchall()
+                if rows:
+                    parts.append("  Sample Rows:")
+                    keys = result.keys()
+                    for idx, row in enumerate(rows, start=1):
+                        row_dict = dict(zip(keys, row))
+                        parts.append(f"    - row{idx}: {row_dict}")
+                else:
+                    parts.append("  Sample Rows: none")
+            except Exception as exc:
+                parts.append(f"  Sample Rows: error ({exc})")
+            parts.append("")
+
+    return "\n".join(parts)
+
+def insert_rows(db_url, table_name, rows):
+    """지정한 테이블에 여러 행을 삽입"""
+    if not rows:
+        return 0
+
+    engine = get_engine(db_url)
+    inspector = inspect(engine)
+    tables = inspector.get_table_names()
+    if table_name not in tables:
+        raise ValueError(f"테이블 '{table_name}' 이(가) 존재하지 않습니다.")
+
+    metadata = MetaData()
+    table = Table(table_name, metadata, autoload_with=engine)
+    column_info = {col["name"]: col for col in inspector.get_columns(table_name)}
+    pk_columns = set(inspector.get_pk_constraint(table_name).get("constrained_columns", []) or [])
+
+    normalized_rows = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        clean_row = {}
+        for key, value in row.items():
+            col_info = column_info.get(key)
+            if not col_info or value is None:
+                continue
+            col_type = str(col_info["type"]).upper()
+            if col_info.get("autoincrement") or (key in pk_columns and "INT" in col_type):
+                continue
+            if key in column_info:
+                clean_row[key] = value
+        if clean_row:
+            normalized_rows.append(clean_row)
+
+    if not normalized_rows:
+        raise ValueError("삽입할 유효한 데이터가 없습니다.")
+
+    with engine.begin() as conn:
+        conn.execute(table.insert(), normalized_rows)
+
+    return len(normalized_rows)
+
 def get_tables_in_topological_order(db_url=None):
     """외래키 의존성을 고려하여 테이블을 위상 정렬 순서로 반환"""
     engine = get_engine(db_url)
@@ -164,6 +383,10 @@ def get_tables_in_topological_order(db_url=None):
         
     return ordered
 
+def _is_identifier_column(col_name: str) -> bool:
+    """id 또는 *_id 형태의 식별자 컬럼인지 판별"""
+    return bool(re.fullmatch(r"id|.+_id", col_name.lower()))
+
 def generate_dummy_data_for_table(db_url, table_name, num_rows=10):
     """지정한 테이블에 대한 더미 데이터 INSERT 쿼리문 및 매핑 파라미터 생성"""
     engine = get_engine(db_url)
@@ -179,7 +402,21 @@ def generate_dummy_data_for_table(db_url, table_name, num_rows=10):
             fk_map[col] = (fk['referred_table'], ref_col)
             
     fake = Faker('ko_KR')
-    
+
+    existing_next_int = {}
+    with engine.connect() as conn:
+        for col in columns:
+            col_name = col['name']
+            col_type = str(col['type']).upper()
+            is_int_like = 'INT' in col_type or 'NUMERIC' in col_type
+            is_id_like = _is_identifier_column(col_name)
+            if is_int_like and is_id_like:
+                try:
+                    result = conn.execute(text(f"SELECT COALESCE(MAX(`{col_name}`), 0) FROM `{table_name}`"))
+                    existing_next_int[col_name] = (result.scalar() or 0) + 1
+                except Exception:
+                    existing_next_int[col_name] = 1
+            
     # 외래키 참조 데이터 조회
     fk_values = {}
     with engine.connect() as conn:
@@ -196,6 +433,8 @@ def generate_dummy_data_for_table(db_url, table_name, num_rows=10):
         for col in columns:
             col_name = col['name']
             col_type = str(col['type']).upper()
+            is_int_type = any(token in col_type for token in ['INT', 'DECIMAL', 'NUMERIC', 'FLOAT', 'DOUBLE'])
+            is_id_like = _is_identifier_column(col_name)
             
             # Auto-increment 컬럼 건너뛰기
             if col.get('autoincrement') or (col_name in pks and 'INT' in col_type and col_name not in fk_map):
@@ -207,7 +446,14 @@ def generate_dummy_data_for_table(db_url, table_name, num_rows=10):
                 if vals:
                     row_data[col_name] = random.choice(vals)
                 else:
-                    row_data[col_name] = random.randint(1, 10)
+                    row_data[col_name] = existing_next_int.get(col_name, 1)
+                    existing_next_int[col_name] = row_data[col_name] + 1
+                continue
+
+            # 식별자 컬럼은 텍스트 대신 정수형 순번으로 채움
+            if is_id_like:
+                row_data[col_name] = existing_next_int.get(col_name, 1)
+                existing_next_int[col_name] = row_data[col_name] + 1
                 continue
                 
             # 컬럼 이름 및 타입 매칭 데이터 생성

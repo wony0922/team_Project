@@ -1,59 +1,111 @@
-import subprocess
-import time
-import webview
-import socket
-import sys
 import os
+import socket
+import subprocess
+import sys
+import time
+from pathlib import Path
+from typing import Optional, Tuple
 
-def is_port_open(port):
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        return s.connect_ex(('127.0.0.1', port)) == 0
+import webview
 
-def _find_python():
-    """venv → .venv → 시스템 Python 순서로 사용 가능한 Python 실행파일을 찾습니다."""
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    candidates = [
-        os.path.join(base_dir, "venv", "Scripts", "python.exe"),
-        os.path.join(base_dir, ".venv", "Scripts", "python.exe"),
-    ]
-    for candidate in candidates:
-        if os.path.exists(candidate):
-            return candidate
-    return sys.executable  # 가상환경이 없으면 시스템 Python 사용
 
-def start_streamlit():
-    python_exe = _find_python()
+def is_port_open(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        return sock.connect_ex(("127.0.0.1", port)) == 0
+
+
+def _find_free_port(preferred_port: int) -> int:
+    """Use the preferred port if it is free; otherwise pick an available local port."""
+    if not is_port_open(preferred_port):
+        return preferred_port
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def start_streamlit() -> Tuple[subprocess.Popen, int, Path]:
+    python_exe = sys.executable
     app_py = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app.py")
-    # [수정됨] 환경변수로 호스트/포트를 바꿀 수 있게 하여 localhost 외 바인딩도 지원합니다.
     host = os.environ.get("DB_BUDDY_HOST", "127.0.0.1")
-    port = os.environ.get("DB_BUDDY_PORT", "8501")
-    
-    # Streamlit을 headless 모드로 실행
-    return subprocess.Popen(
-        [python_exe, "-m", "streamlit", "run", app_py, "--server.headless", "true", "--server.address", host, "--server.port", port],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0 # 윈도우 창 안 띄움
-    )
+    preferred_port = int(os.environ.get("DB_BUDDY_PORT", "8501"))
+    port = _find_free_port(preferred_port)
+    log_path = Path(os.path.dirname(os.path.abspath(__file__))) / "streamlit-startup.log"
+
+    with open(log_path, "w", encoding="utf-8") as log_file:
+        proc = subprocess.Popen(
+            [
+                python_exe,
+                "-m",
+                "streamlit",
+                "run",
+                app_py,
+                "--server.headless",
+                "true",
+                "--server.address",
+                host,
+                "--server.port",
+                str(port),
+            ],
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+
+    return proc, port, log_path
+
+
+def _show_error(message: str, details: Optional[str] = None) -> None:
+    try:
+        import tkinter as tk
+        from tkinter import messagebox
+
+        root = tk.Tk()
+        root.withdraw()
+        if details:
+            messagebox.showerror("DB-Buddy Desktop", f"{message}\n\n{details}")
+        else:
+            messagebox.showerror("DB-Buddy Desktop", message)
+        root.destroy()
+    except Exception:
+        print(message)
+        if details:
+            print(details)
+
 
 if __name__ == "__main__":
-    # Streamlit 실행
-    proc = start_streamlit()
-    port = int(os.environ.get("DB_BUDDY_PORT", "8501"))
-    
-    # Streamlit이 완전히 켜질 때까지 대기 (최대 15초)
-    for _ in range(30):
+    proc, port, log_path = start_streamlit()
+
+    # Wait until the server is ready, but stop early if it crashes.
+    for _ in range(60):
+        if proc.poll() is not None:
+            break
         if is_port_open(port):
             break
         time.sleep(0.5)
-        
+
+    if proc.poll() is not None and not is_port_open(port):
+        log_text = ""
+        try:
+            log_text = log_path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            log_text = f"Log file: {log_path}"
+
+        _show_error(
+            "DB-Buddy server could not start.",
+            "The app stopped before the local page became ready.\n\n"
+            f"Startup log:\n{log_text[-4000:]}",
+        )
+        sys.exit(1)
+
     try:
-        # pywebview로 데스크탑 창 띄우기
-        # Windows OS에서는 Edge HTML/WebView2 기반 창이 뜹니다.
-        # [수정됨] 포트를 환경변수와 맞춰 데스크탑 창에서도 같은 서버를 엽니다.
-        webview.create_window("DB-Buddy Desktop", f"http://127.0.0.1:{port}", width=1400, height=900)
+        webview.create_window(
+            "DB-Buddy Desktop",
+            f"http://127.0.0.1:{port}",
+            width=1400,
+            height=900,
+        )
         webview.start()
     finally:
-        # 데스크탑 창이 닫히면 Streamlit 백그라운드 프로세스도 함께 깨끗하게 종료
         proc.terminate()
         proc.wait()
